@@ -12,6 +12,7 @@
 #include "Effects/GMCAbilityEffect.h"
 #include "Components/ActorComponent.h"
 #include "Utility/GMASBoundQueue.h"
+#include "Utility/GMASSyncedEvent.h"
 #include "GMCAbilityComponent.generated.h"
 
 
@@ -24,6 +25,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnAttributeChanged, FGameplayTag
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FGameplayAttributeChangedNative, const FGameplayTag&, const float, const float);
 				
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnAncillaryTick, float, DeltaTime);
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSyncedEvent, const FGMASSyncedEventContainer&, EventData);
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnActiveTagsChanged, FGameplayTagContainer, AddedTags, FGameplayTagContainer, RemovedTags);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FGameplayTagFilteredMulticastDelegate, const FGameplayTagContainer&, const FGameplayTagContainer&);
@@ -108,6 +111,7 @@ public:
 	FGameplayTagContainer GetGrantedAbilities() const { return GrantedAbilityTags; }
 
 	// Gameplay tags that the controller has
+	UFUNCTION(BlueprintCallable, Category="GMAS|Abilities")
 	FGameplayTagContainer GetActiveTags() const { return ActiveTags; }
 
 	// Return the active ability effects
@@ -122,6 +126,9 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category="GMAS|Abilities")
 	UGMCAbilityEffect* GetFirstActiveEffectByTag(FGameplayTag GameplayTag) const;
 
+	// Return ability map that contains mapping of ability input tags to ability classes
+	TMap<FGameplayTag, FAbilityMapData> GetAbilityMap() { return AbilityMap; }
+	
 	UFUNCTION(BlueprintCallable, Category="GMAS|Abilities")
 	void AddAbilityMapData(UGMCAbilityMapData* AbilityMapData);
 
@@ -189,7 +196,7 @@ public:
 	
 	// Queue an ability to be executed
 	UFUNCTION(BlueprintCallable, DisplayName="Activate Ability", Category="GMAS|Abilities")
-	void QueueAbility(UPARAM(meta=(Categories="Input"))FGameplayTag InputTag, const UInputAction* InputAction = nullptr);
+	void QueueAbility(UPARAM(meta=(Categories="InputTag"))FGameplayTag InputTag, const UInputAction* InputAction = nullptr);
 
 	UFUNCTION(BlueprintCallable, DisplayName="Count Queued Ability Instances", Category="GMAS|Abilities")
 	int32 GetQueuedAbilityCount(FGameplayTag AbilityTag);
@@ -198,7 +205,7 @@ public:
 	int32 GetActiveAbilityCount(TSubclassOf<UGMCAbility> AbilityClass);
 
 	// Perform a check in every active ability against BlockOtherAbility and check if the tag provided is present
-	bool IsAbilityTagBlocked(const FGameplayTag AbilityTag) const;
+	virtual bool IsAbilityTagBlocked(const FGameplayTag AbilityTag) const;
 
 	UFUNCTION(BlueprintCallable, DisplayName="End Abilities (By Tag)", Category="GMAS|Abilities")
 	// End all abilities with the corresponding tag, returns the number of abilities ended
@@ -262,6 +269,8 @@ public:
 	int GetNextAvailableEffectID() const;
 	bool CheckIfEffectIDQueued(int EffectID) const;
 	int CreateEffectOperation(TGMASBoundQueueOperation<UGMCAbilityEffect, FGMCAbilityEffectData>& OutOperation, const TSubclassOf<UGMCAbilityEffect>& Effect, const FGMCAbilityEffectData& EffectData, bool bForcedEffectId = true, EGMCAbilityEffectQueueType QueueType = EGMCAbilityEffectQueueType::Predicted);
+	int CreateSyncedEventOperation(TGMASBoundQueueOperation<UGMASSyncedEvent, FGMASSyncedEventContainer>& OutOperation, const FGMASSyncedEventContainer& EventData);
+	
 	
 	/**
 	 * Applies an effect to the Ability Component. If bOuterActivation is false, the effect will be immediately
@@ -286,6 +295,11 @@ public:
 	void ApplyAbilityEffectSafe(TSubclassOf<UGMCAbilityEffect> EffectClass, FGMCAbilityEffectData InitializationData, EGMCAbilityEffectQueueType QueueType,
 		UPARAM(DisplayName="Success") bool& OutSuccess, UPARAM(DisplayName="Effect Handle") int& OutEffectHandle, UPARAM(DisplayName="Effect Network ID") int& OutEffectId, UPARAM(DisplayName="Effect Instance") UGMCAbilityEffect*& OutEffect);
 
+	/** Short version of ApplyAbilityEffect (Fire and Forget, return nullptr if fail, or the effect instance if success)
+	 * Don't suggest it for BP user to avoid confusion.
+	 */
+	UGMCAbilityEffect* ApplyAbilityEffectShort(TSubclassOf<UGMCAbilityEffect> EffectClass, EGMCAbilityEffectQueueType QueueType);
+
 	/**
 	 * Applies an effect to the ability component. If the Queue Type is Predicted, the effect will be immediately added
 	 * on both client and server; this must happen within the GMC movement lifecycle for it to be valid. If the
@@ -307,6 +321,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category="GMAS|Effects")
 	UGMCAbilityEffect* GetEffectById(const int EffectId) const;
 
+	UFUNCTION(BlueprintCallable, Category="GMAS|Effects")
+	TArray<UGMCAbilityEffect*> GetEffectsByIds(const TArray<int> EffectIds) const;
+
+	UFUNCTION(BlueprintCallable, Category="GMAS|Effects")
+	FString GetEffectsNameAsString(const TArray<UGMCAbilityEffect*>& EffectList) const;
+
 	TArray<int> EffectsMatchingTag(const FGameplayTag& Tag, int32 NumToRemove = -1) const;
 
 	// Do not call this directly unless you know what you are doing; go through the RemoveActiveAbilityEffectSafe if
@@ -316,6 +336,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="GMAS|Effects", DisplayName="Remove Active Ability Effect (Safe)")
 	void RemoveActiveAbilityEffectSafe(UGMCAbilityEffect* Effect, EGMCAbilityEffectQueueType QueueType = EGMCAbilityEffectQueueType::Predicted);
+	
+	UFUNCTION(BlueprintCallable, Category="GMAS|Effects", DisplayName="Remove Active Ability Effect by Tag (Safe)")
+	void RemoveActiveAbilityEffectByTag(FGameplayTag Tag, EGMCAbilityEffectQueueType QueueType = EGMCAbilityEffectQueueType::Predicted, bool bAllInstance = false);
 
 	/**
 	 * Removes an instanced effect if it exists. If NumToRemove == -1, remove all. Returns the number of removed instances.
@@ -373,6 +396,10 @@ public:
 	UPROPERTY(BlueprintAssignable)
 	FOnActiveTagsChanged OnActiveTagsChanged;
 
+	// Called when a synced event is executed
+	UPROPERTY(BlueprintAssignable)
+	FOnSyncedEvent OnSyncedEvent;
+
 	FGameplayTagContainer PreviousActiveTags;
 
 	/** Returns an array of pointers to all attributes */
@@ -380,6 +407,8 @@ public:
 
 	/** Get an Attribute using its Tag */
 	const FAttribute* GetAttributeByTag(FGameplayTag AttributeTag) const;
+
+	TMap<int, UGMCAbility*> GetActiveAbilities() const { return ActiveAbilities; }
 
 	// Get Attribute value by Tag
 	UFUNCTION(BlueprintPure, Category="GMAS|Attributes")
@@ -443,6 +472,7 @@ public:
 	 * @param Handle The delegate handle to be removed.
 	 */
 	void RemoveAttributeChangeDelegate(FDelegateHandle Handle);
+
 
 #pragma region GMC
 	// GMC
@@ -546,26 +576,53 @@ private:
 
 	TGMASBoundQueue<UGMCAbilityEffect, FGMCAbilityEffectData, false> QueuedEffectOperations;
 	TGMASBoundQueue<UGMCAbilityEffect, FGMCAbilityEffectData> QueuedEffectOperations_ClientAuth;
-	UGMCAbilityEffect* ProcessEffectOperation(const TGMASBoundQueueOperation<UGMCAbilityEffect, FGMCAbilityEffectData>& Operation);
 
-	bool ShouldProcessEffectOperation(const TGMASBoundQueueOperation<UGMCAbilityEffect, FGMCAbilityEffectData>& Operation, bool bIsServer = true) const;
-	void ClientQueueEffectOperation(const TGMASBoundQueueOperation<UGMCAbilityEffect, FGMCAbilityEffectData>& Operation);
+	TGMASBoundQueue<UGMASSyncedEvent, FGMASSyncedEventContainer, false> QueuedEventOperations;
+
+	
+	template<typename C, typename T>
+	bool IsOperationValid(const TGMASBoundQueueOperation<C, T>& Operation) const;
+
+	template <typename C, typename T>
+	bool ShouldProcessOperation(const TGMASBoundQueueOperation<C, T>& Operation, TGMASBoundQueue<C, T, false>& QueuedOperations, bool bIsServer = true) const;
+	
+	// Events	
+	virtual void ProcessOperation(const TGMASBoundQueueOperation<UGMASSyncedEvent, FGMASSyncedEventContainer>& Operation);
+
+	// Event Implementations
+
+	// Execute an event that is created by the server where execution is synced between server and client
+	UFUNCTION(BlueprintCallable, Category = "GMASSyncedEvent")
+	void ExecuteSyncedEvent(FGMASSyncedEventContainer EventData);
+
+
+	
+	UFUNCTION(BlueprintCallable, DisplayName="Add Impulse (Synced Event)", Category = "Impulse")
+	void AddImpulse(FVector Impulse, bool bVelChange = false);
+	void AddImpulseEvent(const FGMASSyncedEventContainer& EventData) const;
+	
+	// Effects	
+	virtual UGMCAbilityEffect* ProcessOperation(const TGMASBoundQueueOperation<UGMCAbilityEffect, FGMCAbilityEffectData>& Operation);
+
+	
+	void ClientQueueOperation(const TGMASBoundQueueOperation<UGMCAbilityEffect, FGMCAbilityEffectData>& Operation);
+	void ClientQueueOperation(const TGMASBoundQueueOperation<UGMASSyncedEvent, FGMASSyncedEventContainer>& Operation);
 	
 	UFUNCTION(Client, Reliable)
 	void RPCClientQueueEffectOperation(const FGMASBoundQueueRPCHeader& Header);
+	
+	UFUNCTION(Client, Reliable)
+	void RPCClientQueueEventOperation(const FGMASBoundQueueRPCHeader& Header);
 
 	// Predictions of Effect state changes
 	FEffectStatePrediction EffectStatePrediction{};
 
 	TArray<FEffectStatePrediction> QueuedEffectStates;
-
 	
-
 	UPROPERTY()
 	TMap<int, UGMCAbility*> ActiveAbilities;
 
 	
-
 	UPROPERTY()
 	TMap<FGameplayTag, float> ActiveCooldowns;
 
@@ -638,7 +695,9 @@ private:
 	void ServerHandlePendingEffect(float DeltaTime);
 	void ServerHandlePredictedPendingEffect(float DeltaTime);
 
-	void ClientHandlePendingEffect();
+	template<typename C, typename T>
+	void ClientHandlePendingOperation(TGMASBoundQueue<C, T, false>& QueuedOperations);
+	
 	void ClientHandlePredictedPendingEffect();
 
 	int LateApplicationIDCounter = 0;

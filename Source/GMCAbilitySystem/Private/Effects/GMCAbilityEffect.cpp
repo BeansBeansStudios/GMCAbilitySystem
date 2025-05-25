@@ -56,8 +56,10 @@ void UGMCAbilityEffect::StartEffect()
 	bHasStarted = true;
 
 	// Ensure tag requirements are met before applying the effect
-	if( ( EffectData.MustHaveTags.Num() > 0 && !DoesOwnerHaveTagFromContainer(EffectData.MustHaveTags) ) ||
-		DoesOwnerHaveTagFromContainer(EffectData.MustNotHaveTags) )
+	if( ( EffectData.ApplicationMustHaveTags.Num() > 0 && !DoesOwnerHaveTagFromContainer(EffectData.ApplicationMustHaveTags) ) ||
+	DoesOwnerHaveTagFromContainer(EffectData.ApplicationMustNotHaveTags) ||
+	( EffectData.MustHaveTags.Num() > 0 && !DoesOwnerHaveTagFromContainer(EffectData.MustHaveTags) ) ||
+	DoesOwnerHaveTagFromContainer(EffectData.MustNotHaveTags) )
 	{
 		EndEffect();
 		return;
@@ -65,7 +67,9 @@ void UGMCAbilityEffect::StartEffect()
 	
 	AddTagsToOwner();
 	AddAbilitiesToOwner();
-	EndActiveAbilitiesFromOwner();
+	EndActiveAbilitiesFromOwner(EffectData.CancelAbilityOnActivation);
+
+	bHasAppliedEffect = true;
 
 	// Instant effects modify base value and end instantly
 	if (EffectData.bIsInstant)
@@ -100,6 +104,8 @@ void UGMCAbilityEffect::StartEffect()
 		EndEffect();
 	}
 
+	StartEffectEvent();
+
 	UpdateState(EGMASEffectState::Started, true);
 }
 
@@ -115,8 +121,8 @@ void UGMCAbilityEffect::EndEffect()
 		UpdateState(EGMASEffectState::Ended, true);
 	}
 
-	// Only remove tags and abilities if the effect has started
-	if (!bHasStarted) return;
+	// Only remove tags and abilities if the effect has started and applied
+	if (!bHasStarted || !bHasAppliedEffect) return;
 
 	if (EffectData.bNegateEffectAtEnd)
 	{
@@ -126,8 +132,11 @@ void UGMCAbilityEffect::EndEffect()
 		}
 	}
 	
+	EndActiveAbilitiesFromOwner(EffectData.CancelAbilityOnEnd);
 	RemoveTagsFromOwner(EffectData.bPreserveGrantedTagsIfMultiple);
 	RemoveAbilitiesFromOwner();
+	
+	EndEffectEvent();
 }
 
 
@@ -158,7 +167,15 @@ void UGMCAbilityEffect::BeginDestroy() {
 
 void UGMCAbilityEffect::Tick(float DeltaTime)
 {
-	if (bCompleted) return;
+	// Aherys : I'm not sure if this is correct. Sometime this is GC. We need to catch why, and when.
+	if (bCompleted || IsUnreachable()) {
+		if (IsUnreachable()) {
+			UE_LOG(LogGMCAbilitySystem, Error, TEXT("Effect is unreachable : %s"), *EffectData.EffectTag.ToString());
+			ensureMsgf(false, TEXT("Effect is being ticked after being completed or GC : %s"), *EffectData.EffectTag.ToString());
+		}
+		return;
+	}
+	
 	EffectData.CurrentDuration += DeltaTime;
 	TickEvent(DeltaTime);
 	
@@ -269,9 +286,9 @@ void UGMCAbilityEffect::RemoveAbilitiesFromOwner()
 }
 
 
-void UGMCAbilityEffect::EndActiveAbilitiesFromOwner() {
+void UGMCAbilityEffect::EndActiveAbilitiesFromOwner(const FGameplayTagContainer& TagContainer) {
 	
-	for (const FGameplayTag Tag : EffectData.CancelAbilityOnActivation)
+	for (const FGameplayTag Tag : TagContainer)
 	{
 		OwnerAbilityComponent->EndAbilitiesByTag(Tag);
 	}
