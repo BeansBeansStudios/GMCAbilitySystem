@@ -163,6 +163,28 @@ struct FGMCAbilityEffectData
 	FString ToString() const{
 		return FString::Printf(TEXT("[id: %d] [Tag: %s] (Duration: %.3lf) (CurrentDuration: %.3lf)"), EffectID, *EffectTag.ToString(), Duration, CurrentDuration);
 	}
+
+	// query stuff
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "GMCAbilitySystem")
+	// Container for a more generalized definition of effects
+	FGameplayTagContainer EffectDefinition;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "GMCAbilitySystem")
+	// query must match on effect activation
+	FGameplayTagQuery ActivationQuery;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "GMCAbilitySystem")
+	// query must be maintained throughout effect
+	FGameplayTagQuery MustMaintainQuery;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "GMCAbilitySystem", meta = (DisplayName = "End Ability On Activation Via Definition Query"))
+	// end ability on effect activation if definition matches query
+	FGameplayTagQuery EndAbilityOnActivationQuery;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "GMCAbilitySystem", meta = (DisplayName = "End Ability On End Via Definition Query"))
+	// end ability on effect end if definition matches query
+	FGameplayTagQuery EndAbilityOnEndQuery;
+
 };
 
 /**
@@ -183,7 +205,8 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "GMCAbilitySystem")
 	void InitializeEffect(FGMCAbilityEffectData InitializationData);
-	
+
+	UFUNCTION(BlueprintCallable, Category = "GMCAbilitySystem")
 	void EndEffect();
 
 	virtual void BeginDestroy() override;
@@ -191,16 +214,20 @@ public:
 	virtual void Tick(float DeltaTime);
 
 	// Return the current duration of the effect
-	UFUNCTION(BlueprintCallable, BlueprintPure, Category="GMAS|Abilities")
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category="GMAS|Effects")
 	float GetCurrentDuration() const { return EffectData.CurrentDuration; }
 
-	// Return the current duration of the effect
-	UFUNCTION(BlueprintCallable, BlueprintPure, Category="GMAS|Abilities")
+	// Return the effect data struct of targeted effect
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category="GMAS|Effects")
 	FGMCAbilityEffectData GetEffectData() const { return EffectData; }
 
-	// Return the current duration of the effect
-	UFUNCTION(BlueprintCallable, BlueprintPure, Category="GMAS|Abilities")
+	// Return the total duration of the effect
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category="GMAS|Effects")
 	float GetEffectTotalDuration() const { return EffectData.Duration; }
+
+	// Return the current remaining duration of the effect
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category="GMAS|Effects")
+	float GetEffectRemainingDuration() const { return EffectData.Duration - EffectData.CurrentDuration; }
 
 	UFUNCTION(BlueprintNativeEvent, meta=(DisplayName="Effect Tick"), Category="GMCAbilitySystem")
 	void TickEvent(float DeltaTime);
@@ -211,6 +238,9 @@ public:
 	bool AttributeDynamicCondition() const;
 	
 	void PeriodTick();
+
+	UFUNCTION(BlueprintNativeEvent, meta=(DisplayName="Period Tick"), Category="GMCAbilitySystem")
+	void PeriodTickEvent();
 	
 	void UpdateState(EGMASEffectState State, bool Force=false);
 
@@ -221,6 +251,9 @@ public:
 	// Time that the client applied this Effect. Used for when a client predicts an effect, if the server has not
 	// confirmed this effect within a time range, the effect will be cancelled.
 	float ClientEffectApplicationTime;
+
+	UFUNCTION(BlueprintPure)
+	void GetOwnerActor(AActor*& OwnerActor) const;
 
 protected:
 	UPROPERTY(BlueprintReadOnly, Category = "GMCAbilitySystem")
@@ -257,7 +290,7 @@ private:
 	
 	bool DuplicateEffectAlreadyApplied();
 
-
+	void EndActiveAbilitiesByDefinitionQuery(FGameplayTagQuery);
 
 	
 public:
@@ -273,5 +306,11 @@ public:
 	FString ToString() {
 		return FString::Printf(TEXT("[name: %s] (State %s) | Started: %d | Period Paused: %d | Data: %s"), *GetName(), *EnumToString(CurrentState), bHasStarted, IsPeriodPaused(), *EffectData.ToString());
 	}
+
+	UFUNCTION(BlueprintCallable, Category = "GMCAbilitySystem|Effects|Queries")
+	void ModifyMustMaintainQuery(const FGameplayTagQuery& NewQuery);
+
+	UFUNCTION(BlueprintCallable, Category = "GMCAbilitySystem|Effects|Queries")
+	void ModifyEndAbilitiesOnEndQuery(const FGameplayTagQuery& NewQuery);
 };
 

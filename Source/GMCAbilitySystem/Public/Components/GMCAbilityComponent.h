@@ -1,4 +1,4 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
+// Fill out your copyright notice in the Description page of Project Settings.
 
 #pragma once
 
@@ -16,6 +16,9 @@
 #include "GMCAbilityComponent.generated.h"
 
 
+class UNiagaraComponent;
+struct FFXSystemSpawnParameters;
+class UNiagaraSystem;
 class UGMCAbilityAnimInstance;
 class UGMCAbilityMapData;
 class UGMCAttributesData;
@@ -28,8 +31,14 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnAncillaryTick, float, DeltaTime);
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSyncedEvent, const FGMASSyncedEventContainer&, EventData);
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnAbilityActivated, UGMCAbility*, Ability, FGameplayTag, AbilityTag);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnAbilityEnded, UGMCAbility*, Ability);
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnActiveTagsChanged, FGameplayTagContainer, AddedTags, FGameplayTagContainer, RemovedTags);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FGameplayTagFilteredMulticastDelegate, const FGameplayTagContainer&, const FGameplayTagContainer&);
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnEffectApplied, UGMCAbilityEffect*, AppliedEffect);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnEffectRemoved, UGMCAbilityEffect*, RemovedEffect);
 
 USTRUCT()
 struct FEffectStatePrediction
@@ -215,6 +224,10 @@ public:
 	// End all abilities with the corresponding tag, returns the number of abilities ended
 	int EndAbilitiesByClass(TSubclassOf<UGMCAbility> AbilityClass);
 	
+	UFUNCTION(BlueprintCallable, DisplayName = "End Abilities (By Definition Query)", Category="GMAS|Abilities")
+	// End all abilities matching query
+	int EndAbilitiesByQuery(const FGameplayTagQuery& Query);
+
 	UFUNCTION(BlueprintCallable, DisplayName="Count Activated Ability Instances (by tag)", Category="GMAS|Abilities")
 	int32 GetActiveAbilityCountByTag(FGameplayTag AbilityTag);
 	
@@ -264,7 +277,7 @@ public:
 	UFUNCTION()
 	void OnRep_UnBoundAttributes();
 
-	void CheckUnBoundAttributeChanges();
+	void CheckUnBoundAttributeChanged();
 
 	int GetNextAvailableEffectID() const;
 	bool CheckIfEffectIDQueued(int EffectID) const;
@@ -371,6 +384,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="GMAS|Effects", DisplayName="Remove Effect by Handle")
 	bool RemoveEffectByHandle(int EffectHandle, EGMCAbilityEffectQueueType QueueType);
 	
+	UFUNCTION(BlueprintCallable, Category="GMAS|Effects", DisplayName="Remove Effects by Definition Query")
+	int32 RemoveEffectsByQuery(const FGameplayTagQuery& Query, EGMCAbilityEffectQueueType QueueType);
+
 	/**
 	 * Gets the number of active effects with the inputted tag.
 	 * Returns -1 if tag is invalid.
@@ -396,11 +412,24 @@ public:
 	UPROPERTY(BlueprintAssignable)
 	FOnActiveTagsChanged OnActiveTagsChanged;
 
+	// Called when an ability is successfully activated
+	UPROPERTY(BlueprintAssignable)
+	FOnAbilityActivated OnAbilityActivated;
+
+	UPROPERTY(BlueprintAssignable)
+	FOnAbilityEnded OnAbilityEnded;
+
 	// Called when a synced event is executed
 	UPROPERTY(BlueprintAssignable)
 	FOnSyncedEvent OnSyncedEvent;
 
 	FGameplayTagContainer PreviousActiveTags;
+
+	UPROPERTY(BlueprintAssignable)
+	FOnEffectApplied OnEffectApplied;
+
+	UPROPERTY(BlueprintAssignable)
+	FOnEffectRemoved OnEffectRemoved;
 
 	/** Returns an array of pointers to all attributes */
 	TArray<const FAttribute*> GetAllAttributes() const;
@@ -555,6 +584,12 @@ private:
 	// Map of Ability Tags to Ability Classes
 	TMap<FGameplayTag, FAbilityMapData> AbilityMap;
 
+public:
+	// Empty the AbilityMap and remove all granted abilities from existing maps
+	UFUNCTION(BlueprintCallable)
+	void ClearAbilityMap();
+
+private:
 	// List of filtered tag delegates to call when tags change.
 	TArray<TPair<FGameplayTagContainer, FGameplayTagFilteredMulticastDelegate>> FilteredTagDelegates;
 
@@ -618,10 +653,8 @@ private:
 	FEffectStatePrediction EffectStatePrediction{};
 
 	TArray<FEffectStatePrediction> QueuedEffectStates;
-	
 	UPROPERTY()
 	TMap<int, UGMCAbility*> ActiveAbilities;
-
 	
 	UPROPERTY()
 	TMap<FGameplayTag, float> ActiveCooldowns;
@@ -726,5 +759,38 @@ private:
 	void RPCClientEndEffect(int EffectID);
 
 	friend UGMCAbilityAnimInstance;
+
+public:
+	// Networked FX
+	// Is this ASC locally controlled?
+	bool IsLocallyControlledPawnASC() const;
+	
+	// Spawn a Niagara system attached to a component
+	// IsClientPredicted: If true, the system will be spawned on the client immediately. False, the local client will spawn it when the multicast is received
+	// bDelayByGMCSmoothing: If true, the system will be spawned with a delay for SimProxies to match the smoothing delay
+	UFUNCTION(BlueprintCallable, Category="GMAS|FX")
+	UNiagaraComponent* SpawnParticleSystemAttached(FFXSystemSpawnParameters SpawnParams, bool bIsClientPredicted = false, bool bDelayByGMCSmoothing = false);
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void MC_SpawnParticleSystemAttached(const FFXSystemSpawnParameters& SpawnParams, bool bIsClientPredicted = false, bool bDelayByGMCSmoothing = false);
+
 		
+	// Spawn a Niagara system at a world location
+	// IsClientPredicted: If true, the system will be spawned on the client immediately. False, the local client will spawn it when the multicast is received
+	// bDelayByGMCSmoothing: If true, the system will be spawned with a delay for SimProxies to match the smoothing delay
+	UFUNCTION(BlueprintCallable, Category="GMAS|FX")
+	UNiagaraComponent* SpawnParticleSystemAtLocation(FFXSystemSpawnParameters SpawnParams, bool bIsClientPredicted = false, bool bDelayByGMCSmoothing = false);
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void MC_SpawnParticleSystemAtLocation(const FFXSystemSpawnParameters& SpawnParams, bool bIsClientPredicted = false, bool bDelayByGMCSmoothing = false);
+
+	
+	// Spawn a Sound at the given location
+	UFUNCTION(BlueprintCallable, Category="GMAS|FX")
+	void SpawnSound(USoundBase* Sound, FVector Location, float VolumeMultiplier = 1.f, float PitchMultiplier = 1.f, bool bIsClientPredicted = false);
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void MC_SpawnSound(USoundBase* Sound, FVector Location, float VolumeMultiplier = 1.f, float PitchMultiplier = 1.f, bool bIsClientPredicted = false);
+
+	
 };

@@ -1,4 +1,4 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
+// Fill out your copyright notice in the Description page of Project Settings.
 
 
 #include "Components/GMCAbilityComponent.h"
@@ -6,10 +6,12 @@
 #include "GMCAbilitySystem.h"
 #include "GMCOrganicMovementComponent.h"
 #include "GMCPlayerController.h"
+#include "NiagaraFunctionLibrary.h"
 #include "Ability/GMCAbility.h"
 #include "Ability/GMCAbilityMapData.h"
 #include "Attributes/GMCAttributesData.h"
 #include "Effects/GMCAbilityEffect.h"
+#include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Net/UnrealNetwork.h"
 
@@ -82,12 +84,6 @@ void UGMC_AbilitySystemComponent::BindReplicationData()
 	// We sort our attributes alphabetically by tag so that it's deterministic.
 	for (auto& AttributeForBind : BoundAttributes.Attributes)
 	{
-		GMCMovementComponent->BindSinglePrecisionFloat(AttributeForBind.BaseValue,
-			EGMC_PredictionMode::ServerAuth_Output_ClientValidated,
-			EGMC_CombineMode::CombineIfUnchanged,
-			EGMC_SimulationMode::Periodic_Output,
-			EGMC_InterpolationFunction::TargetValue);
-		
 		GMCMovementComponent->BindSinglePrecisionFloat(AttributeForBind.Value,
 			EGMC_PredictionMode::ServerAuth_Output_ClientValidated,
 			EGMC_CombineMode::CombineIfUnchanged,
@@ -113,13 +109,6 @@ void UGMC_AbilitySystemComponent::BindReplicationData()
 			EGMC_InterpolationFunction::TargetValue);
 	}
 	
-	// Sync'd Action Timer
-	GMCMovementComponent->BindDoublePrecisionFloat(ActionTimer,
-		EGMC_PredictionMode::ServerAuth_Output_ClientValidated,
-		EGMC_CombineMode::CombineIfUnchanged,
-		EGMC_SimulationMode::None,
-		EGMC_InterpolationFunction::TargetValue);
-
 	// Granted Abilities
 	GMCMovementComponent->BindGameplayTagContainer(GrantedAbilityTags,
 		EGMC_PredictionMode::ServerAuth_Output_ClientValidated,
@@ -169,9 +158,12 @@ void UGMC_AbilitySystemComponent::GenAncillaryTick(float DeltaTime, bool bIsComb
 	
 	CheckActiveTagsChanged();
 	CheckAttributeChanged();
+	CheckUnBoundAttributeChanged();
 
 	
 	TickActiveCooldowns(DeltaTime);
+
+	SendTaskDataToActiveAbility(false);
 	TickAncillaryActiveAbilities(DeltaTime);
 
 	// Check if we have a valid operation
@@ -180,8 +172,6 @@ void UGMC_AbilitySystemComponent::GenAncillaryTick(float DeltaTime, bool bIsComb
 	{
 		ProcessAbilityOperation(Operation, false);
 	}
-
-	SendTaskDataToActiveAbility(false);
 	
 	ClearAbilityAndTaskData();
 	QueuedEffectOperations_ClientAuth.ClearCurrentOperation();
@@ -377,7 +367,7 @@ bool UGMC_AbilitySystemComponent::TryActivateAbility(const TSubclassOf<UGMCAbili
 	ActiveAbilities.Add(AbilityID, Ability);
 	
 	if (HasAuthority()) {RPCConfirmAbilityActivation(AbilityID);}
-	
+
 	return true;
 }
 
@@ -451,6 +441,26 @@ int UGMC_AbilitySystemComponent::EndAbilitiesByClass(TSubclassOf<UGMCAbility> Ab
 		{
 			ActiveAbilityData.Value->EndAbility();
 			AbilitiesEnded++;
+		}
+	}
+	return AbilitiesEnded;
+}
+
+
+int UGMC_AbilitySystemComponent::EndAbilitiesByQuery(const FGameplayTagQuery& Query)
+{
+	int AbilitiesEnded = 0;
+
+	for (const auto& ActiveAbilityData : ActiveAbilities)
+	{
+		if (UGMCAbility* Ability = ActiveAbilityData.Value)
+		{
+			if (Query.Matches(Ability->AbilityDefinition))
+			{
+				Ability->SetPendingEnd();
+				AbilitiesEnded++;
+				UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("cancelled ability %s by query"), *Ability->AbilityTag.ToString());
+			}
 		}
 	}
 	return AbilitiesEnded;
@@ -538,11 +548,14 @@ bool UGMC_AbilitySystemComponent::IsServerOnly() const
 void UGMC_AbilitySystemComponent::GenPredictionTick(float DeltaTime)
 {
 	bJustTeleported = false;
-	ActionTimer += DeltaTime;
+	// ActionTimer += DeltaTime;
+	ActionTimer = GMCMovementComponent->GetMoveTimestamp();
 	
 	ApplyStartingEffects();
-	
+
+	SendTaskDataToActiveAbility(true);
 	TickActiveAbilities(DeltaTime);
+	
 	TickActiveEffects(DeltaTime);
 	
 	// Abilities
@@ -562,7 +575,7 @@ void UGMC_AbilitySystemComponent::GenPredictionTick(float DeltaTime)
 
 	ServerHandlePredictedPendingEffect(DeltaTime);
 	
-	SendTaskDataToActiveAbility(true);
+	
 }
 
 void UGMC_AbilitySystemComponent::GenSimulationTick(float DeltaTime)
@@ -572,6 +585,7 @@ void UGMC_AbilitySystemComponent::GenSimulationTick(float DeltaTime)
 	{
 		CheckActiveTagsChanged();
 		CheckAttributeChanged();
+		CheckUnBoundAttributeChanged();
 	}
 	
 	if (GMCMovementComponent->GetSmoothingTargetIdx() == -1) return;	
@@ -735,6 +749,7 @@ void UGMC_AbilitySystemComponent::CheckAttributeChanged() {
 		FAttribute& OldAttribute = OldBoundAttributes.Attributes[i];
 		if (Attribute.Value != OldAttribute.Value)
 		{
+			NativeAttributeChangeDelegate.Broadcast(Attribute.Tag, OldAttribute.Value, Attribute.Value);
 			OnAttributeChanged.Broadcast(Attribute.Tag, OldAttribute.Value, Attribute.Value);
 			OldAttribute.Value = Attribute.Value;
 		}
@@ -968,12 +983,14 @@ void UGMC_AbilitySystemComponent::ClientHandlePredictedPendingEffect()
 	}
 }
 
-void UGMC_AbilitySystemComponent::RPCTaskHeartbeat_Implementation(int AbilityID, int TaskID)
+bool UGMC_AbilitySystemComponent::IsLocallyControlledPawnASC() const
 {
-	if (ActiveAbilities.Contains(AbilityID) && ActiveAbilities[AbilityID] != nullptr)
+	if (const APawn* Pawn = Cast<APawn>(GetOwner()))
 	{
-		ActiveAbilities[AbilityID]->HandleTaskHeartbeat(TaskID);
+		return Pawn->IsLocallyControlled();
 	}
+
+	return false;
 }
 
 void UGMC_AbilitySystemComponent::RPCClientEndEffect_Implementation(int EffectID)
@@ -982,6 +999,14 @@ void UGMC_AbilitySystemComponent::RPCClientEndEffect_Implementation(int EffectID
 	{
 		ActiveEffects[EffectID]->EndEffect();
 		UE_LOG(LogGMCAbilitySystem, VeryVerbose, TEXT("[RPC] Server Ended Effect: %d"), EffectID);
+	}
+}
+
+void UGMC_AbilitySystemComponent::RPCTaskHeartbeat_Implementation(int AbilityID, int TaskID)
+{
+	if (ActiveAbilities.Contains(AbilityID) && ActiveAbilities[AbilityID] != nullptr)
+	{
+		ActiveAbilities[AbilityID]->HandleTaskHeartbeat(TaskID);
 	}
 }
 
@@ -1073,6 +1098,7 @@ bool UGMC_AbilitySystemComponent::CheckActivationTags(const UGMCAbility* Ability
 		}
 	}
 
+
 	// Blocking Tags
 	for (const FGameplayTag Tag : Ability->ActivationBlockedTags)
 	{
@@ -1083,10 +1109,31 @@ bool UGMC_AbilitySystemComponent::CheckActivationTags(const UGMCAbility* Ability
 		}
 	}
 
+	// single activation query
+	if (!Ability->ActivationQuery.IsEmpty() && !Ability->ActivationQuery.Matches(ActiveTags))
+	{
+		UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("Ability can't activate, blocked by query: %s"),
+			*Ability->ActivationQuery.GetDescription());
+		return false;
+	}
+
 	return true;
-	
 }
 
+
+void UGMC_AbilitySystemComponent::ClearAbilityMap()
+{
+	// For each AbilityMap in the map AbilityMap:
+	for (auto& AbilityMapData : AbilityMap)
+	{
+		if (GrantedAbilityTags.HasTag(AbilityMapData.Value.InputTag))
+		{
+			GrantedAbilityTags.RemoveTag(AbilityMapData.Value.InputTag);
+		}
+	}
+	
+	AbilityMap.Empty();
+}
 
 void UGMC_AbilitySystemComponent::InitializeAbilityMap(){
 	for (UGMCAbilityMapData* StartingAbilityMap : AbilityMaps)
@@ -1125,12 +1172,12 @@ void UGMC_AbilitySystemComponent::RemoveAbilityMapData(const FAbilityMapData& Ab
 	{
 		AbilityMap.Remove(AbilityMapData.InputTag);
 	}
+	
+	if (GrantedAbilityTags.HasTag(AbilityMapData.InputTag))
 	{
-		if (GrantedAbilityTags.HasTag(AbilityMapData.InputTag))
-		{
-			GrantedAbilityTags.RemoveTag(AbilityMapData.InputTag);
-		}
+		GrantedAbilityTags.RemoveTag(AbilityMapData.InputTag);
 	}
+	
 }
 
 void UGMC_AbilitySystemComponent::InitializeStartingAbilities()
@@ -1379,17 +1426,13 @@ void UGMC_AbilitySystemComponent::RPCClientQueueEffectOperation_Implementation(c
 
 void UGMC_AbilitySystemComponent::OnRep_UnBoundAttributes()
 {
-	
 	if (OldUnBoundAttributes.Items.Num() != UnBoundAttributes.Items.Num())
 	{
 		UE_LOG(LogGMCAbilitySystem, Error, TEXT("OnRep_UnBoundAttributes: Mismatched Attribute Old != New Value !"));
 	}
-
-	CheckUnBoundAttributeChanges();
-	
 }
 
-void UGMC_AbilitySystemComponent::CheckUnBoundAttributeChanges()
+void UGMC_AbilitySystemComponent::CheckUnBoundAttributeChanged()
 {
 	TArray<FAttribute>& OldAttributes = OldUnBoundAttributes.Items;
 	const TArray<FAttribute>& CurrentAttributes = UnBoundAttributes.Items;
@@ -1693,7 +1736,7 @@ bool UGMC_AbilitySystemComponent::ApplyAbilityEffect(TSubclassOf<UGMCAbilityEffe
 				return false;
 			}
 
-			if (QueueType == EGMCAbilityEffectQueueType::ServerAuthMove) Operation.Header.RPCGracePeriodSeconds = 5.f;
+			if (QueueType == EGMCAbilityEffectQueueType::ServerAuthMove) Operation.Header.RPCGracePeriodSeconds = Operation.Payload.ClientGraceTime;;
 
 			QueuedEffectOperations.QueuePreparedOperation(Operation, QueueType == EGMCAbilityEffectQueueType::ServerAuthMove);
 
@@ -1830,7 +1873,10 @@ void UGMC_AbilitySystemComponent::RemoveActiveAbilityEffectByTag(FGameplayTag Ta
 	
 }
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 89ebde50f13cbeaffbb2a8b757ea5a913d16383b
 TArray<int> UGMC_AbilitySystemComponent::EffectsMatchingTag(const FGameplayTag& Tag, int32 NumToRemove) const
 {
 	if (NumToRemove < -1 || !Tag.IsValid()) {
@@ -1889,6 +1935,25 @@ int32 UGMC_AbilitySystemComponent::RemoveEffectByTagSafe(FGameplayTag InEffectTa
 	return EffectsToRemove.Num();	
 }
 
+int UGMC_AbilitySystemComponent::RemoveEffectsByQuery(const FGameplayTagQuery& Query, EGMCAbilityEffectQueueType QueueType)
+{
+	int EffectsRemoved = 0;
+
+	for (const auto& EffectEntry : ActiveEffects)
+	{
+		if (UGMCAbilityEffect* Effect = EffectEntry.Value)
+		{
+			if (Query.Matches(Effect->EffectData.EffectDefinition))
+			{
+				RemoveActiveAbilityEffectSafe(Effect, QueueType);
+				EffectsRemoved++;
+				UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("Removed effect %s by query"), *Effect->EffectData.EffectTag.ToString());
+			}
+		}
+	}
+	return EffectsRemoved;
+}
+
 bool UGMC_AbilitySystemComponent::RemoveEffectByIdSafe(TArray<int> Ids, EGMCAbilityEffectQueueType QueueType)
 {
 	if (!Ids.Num()) {
@@ -1909,7 +1974,6 @@ bool UGMC_AbilitySystemComponent::RemoveEffectByIdSafe(TArray<int> Ids, EGMCAbil
 			{
 				if (!GMCMovementComponent->IsExecutingMove() && GetNetMode() != NM_Standalone && !bInAncillaryTick)
 				{
-					
 					ensureMsgf(false, TEXT("[%20s] %s attempted a predicted removal of effects outside of a movement cycle! (%s)"),
 						*GetNetRoleAsString(GetOwnerRole()), *GetOwner()->GetName(), *GetEffectsNameAsString(GetEffectsByIds(Ids)));
 					UE_LOG(LogGMCAbilitySystem, Error, TEXT("[%20s] %s attempted a predicted removal of effects outside of a movement cycle! (%s)"),
@@ -2177,9 +2241,6 @@ void UGMC_AbilitySystemComponent::ApplyAbilityEffectModifier(FGMCAttributeModifi
 		// Only broadcast a change if we've genuinely changed.
 		if (OldValue != AffectedAttribute->Value)
 		{
-			OnAttributeChanged.Broadcast(AffectedAttribute->Tag, OldValue, AffectedAttribute->Value);
-			NativeAttributeChangeDelegate.Broadcast(AffectedAttribute->Tag, OldValue, AffectedAttribute->Value);
-
 			if (!AffectedAttribute->bIsGMCBound)
 			{
 				UnBoundAttributes.MarkAttributeDirty(*AffectedAttribute);
@@ -2187,6 +2248,133 @@ void UGMC_AbilitySystemComponent::ApplyAbilityEffectModifier(FGMCAttributeModifi
 		}
 	}
 }
+
+//////////////// FX
+
+UNiagaraComponent* UGMC_AbilitySystemComponent::SpawnParticleSystemAttached(FFXSystemSpawnParameters SpawnParams, 
+	bool bIsClientPredicted, bool bDelayByGMCSmoothing)
+{
+	if (SpawnParams.SystemTemplate == nullptr)
+	{
+		UE_LOG(LogGMCAbilitySystem, Error, TEXT("Trying to spawn FX, but FX is null!"));
+		return nullptr;
+	}
+	
+	if (SpawnParams.WorldContextObject == nullptr)
+	{
+		SpawnParams.WorldContextObject = GetWorld();
+	}
+
+	if (HasAuthority())
+	{
+		MC_SpawnParticleSystemAttached(SpawnParams, bIsClientPredicted, bDelayByGMCSmoothing);
+	}
+
+	// Sim Proxies can delay FX by the smoothing delay to better line up
+	if (bDelayByGMCSmoothing && !HasAuthority() && !IsLocallyControlledPawnASC())
+	{
+		float Delay = GMCMovementComponent->GetTime() - GMCMovementComponent->GetSmoothingTime();
+		FTimerHandle DelayHandle;
+		GetWorld()->GetTimerManager().SetTimer(DelayHandle, [this, SpawnParams]()
+		{
+			UNiagaraFunctionLibrary::SpawnSystemAttachedWithParams(SpawnParams);
+		}, Delay, false);
+		return nullptr;
+	}
+
+	UNiagaraComponent* SpawnedComponent = UNiagaraFunctionLibrary::SpawnSystemAttachedWithParams(SpawnParams);
+	return SpawnedComponent;
+}
+
+void UGMC_AbilitySystemComponent::MC_SpawnParticleSystemAttached_Implementation(const FFXSystemSpawnParameters& SpawnParams, bool bIsClientPredicted, bool bDelayByGMCSmoothing)
+{
+	// Server already spawned
+	if (HasAuthority()) return;
+	
+	// Owning client already spawned
+	if (IsLocallyControlledPawnASC() && bIsClientPredicted) return;
+	
+	SpawnParticleSystemAttached(SpawnParams, bIsClientPredicted, bDelayByGMCSmoothing);
+}
+
+UNiagaraComponent* UGMC_AbilitySystemComponent::SpawnParticleSystemAtLocation(FFXSystemSpawnParameters SpawnParams, bool bIsClientPredicted,
+	bool bDelayByGMCSmoothing)
+{
+	if (SpawnParams.SystemTemplate == nullptr)
+	{
+		UE_LOG(LogGMCAbilitySystem, Error, TEXT("Trying to spawn FX, but FX is null!"));
+		return nullptr;
+	}
+	
+	if (SpawnParams.WorldContextObject == nullptr)
+	{
+		SpawnParams.WorldContextObject = GetWorld();
+	}
+
+	if (HasAuthority())
+	{
+		MC_SpawnParticleSystemAtLocation(SpawnParams, bIsClientPredicted, bDelayByGMCSmoothing);
+	}
+
+	// Sim Proxies can delay FX by the smoothing delay to better line up
+	if (bDelayByGMCSmoothing && !HasAuthority() && !IsLocallyControlledPawnASC())
+	{
+		float Delay = GMCMovementComponent->GetTime() - GMCMovementComponent->GetSmoothingTime();
+		FTimerHandle DelayHandle;
+		GetWorld()->GetTimerManager().SetTimer(DelayHandle, [this, SpawnParams]()
+		{
+			UNiagaraFunctionLibrary::SpawnSystemAtLocationWithParams(SpawnParams);
+		}, Delay, false);
+
+		UE_LOG(LogTemp, Warning, TEXT("Delay: %f"), Delay);
+
+		return nullptr;
+	}
+
+	UNiagaraComponent* SpawnedComponent = UNiagaraFunctionLibrary::SpawnSystemAtLocationWithParams(SpawnParams);
+	return SpawnedComponent;
+}
+
+void UGMC_AbilitySystemComponent::MC_SpawnParticleSystemAtLocation_Implementation(const FFXSystemSpawnParameters& SpawnParams,
+	bool bIsClientPredicted, bool bDelayByGMCSmoothing)
+{
+	// Server already spawned
+	if (HasAuthority()) return;
+	
+	// Owning client already spawned
+	if (IsLocallyControlledPawnASC() && bIsClientPredicted) return;
+	
+	SpawnParticleSystemAtLocation(SpawnParams, bIsClientPredicted, bDelayByGMCSmoothing);
+}
+
+void UGMC_AbilitySystemComponent::SpawnSound(USoundBase* Sound, const FVector Location, const float VolumeMultiplier, const float PitchMultiplier, const bool bIsClientPredicted)
+{
+	// Spawn sound
+	if (Sound == nullptr)
+	{
+		UE_LOG(LogGMCAbilitySystem, Error, TEXT("Trying to spawn sound, but sound is null!"));
+		return;
+	}
+
+	if (HasAuthority())
+	{
+		MC_SpawnSound(Sound, Location, VolumeMultiplier, PitchMultiplier, bIsClientPredicted);
+	}
+
+	// Spawn Sound At Location
+	UGameplayStatics::PlaySoundAtLocation(GetWorld(), Sound, Location, VolumeMultiplier, PitchMultiplier);
+}
+
+void UGMC_AbilitySystemComponent::MC_SpawnSound_Implementation(USoundBase* Sound, const FVector Location, const float VolumeMultiplier, const float PitchMultiplier,
+	bool bIsClientPredicted)
+{
+	// Server already spawned
+	if (HasAuthority()) return;
+
+	if (IsLocallyControlledPawnASC() && bIsClientPredicted) return;
+	SpawnSound(Sound, Location, VolumeMultiplier, PitchMultiplier, bIsClientPredicted);
+}
+
 // ReplicatedProps
 void UGMC_AbilitySystemComponent::GetLifetimeReplicatedProps(TArray< FLifetimeProperty > & OutLifetimeProps) const
 {

@@ -18,15 +18,17 @@ void FGameplayDebuggerCategory_GMCAbilitySystem::CollectData(APlayerController* 
 	if (DebugActor)
 	{
 		DataPack.ActorName = DebugActor->GetName();
-
+		
 		if (const UGMC_AbilitySystemComponent* AbilityComponent = DebugActor->FindComponentByClass<UGMC_AbilitySystemComponent>())
 		{
+			AbilityComponent->GMCMovementComponent->SV_SwapServerState();
 			DataPack.GrantedAbilities = AbilityComponent->GetGrantedAbilities().ToStringSimple();
 			DataPack.ActiveTags = AbilityComponent->GetActiveTags().ToStringSimple();
 			DataPack.Attributes = AbilityComponent->GetAllAttributesString();
 			DataPack.ActiveEffects = AbilityComponent->GetActiveEffectsString();
 			DataPack.ActiveEffectData = AbilityComponent->GetActiveEffectsDataString();
 			DataPack.ActiveAbilities = AbilityComponent->GetActiveAbilitiesString();
+			AbilityComponent->GMCMovementComponent->SV_SwapServerState();
 		}
 	}
 }

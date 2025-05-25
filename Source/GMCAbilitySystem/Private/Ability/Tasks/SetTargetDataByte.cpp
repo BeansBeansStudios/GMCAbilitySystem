@@ -16,7 +16,7 @@ void UGMCAbilityTask_SetTargetDataByte::Activate()
 {
 	Super::Activate();
 
-	if (AbilitySystemComponent->GetNetMode() != NM_DedicatedServer)
+	if (IsClientOrRemoteListenServerPawn())
 	{
 		ClientProgressTask();
 	}

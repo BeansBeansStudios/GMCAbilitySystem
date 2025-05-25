@@ -11,7 +11,7 @@ UGMCAbilityTask_SetTargetDataGameplayTag* UGMCAbilityTask_SetTargetDataGameplayT
 void UGMCAbilityTask_SetTargetDataGameplayTag::Activate(){
 	Super::Activate();
 
-	if (AbilitySystemComponent->GetNetMode() != NM_DedicatedServer)
+	if (IsClientOrRemoteListenServerPawn())
 	{
 		ClientProgressTask();
 	}

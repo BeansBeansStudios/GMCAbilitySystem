@@ -65,11 +65,22 @@ void UGMCAbilityEffect::StartEffect()
 		return;
 	}
 	
+	// Effect Query
+	if (!EffectData.ActivationQuery.IsEmpty() && !EffectData.ActivationQuery.Matches(OwnerAbilityComponent->GetActiveTags()))
+		{
+		EndEffect();
+		return;
+	}
+
 	AddTagsToOwner();
 	AddAbilitiesToOwner();
 	EndActiveAbilitiesFromOwner(EffectData.CancelAbilityOnActivation);
 
+	EndActiveAbilitiesByDefinitionQuery(EffectData.EndAbilityOnActivationQuery);
+
 	bHasAppliedEffect = true;
+
+	OwnerAbilityComponent->OnEffectApplied.Broadcast(this);
 
 	// Instant effects modify base value and end instantly
 	if (EffectData.bIsInstant)
@@ -132,10 +143,14 @@ void UGMCAbilityEffect::EndEffect()
 		}
 	}
 	
+	EndActiveAbilitiesByDefinitionQuery(EffectData.EndAbilityOnEndQuery);
+
 	EndActiveAbilitiesFromOwner(EffectData.CancelAbilityOnEnd);
 	RemoveTagsFromOwner(EffectData.bPreserveGrantedTagsIfMultiple);
 	RemoveAbilitiesFromOwner();
 	
+	OwnerAbilityComponent->OnEffectRemoved.Broadcast(this);
+
 	EndEffectEvent();
 }
 
@@ -186,6 +201,11 @@ void UGMCAbilityEffect::Tick(float DeltaTime)
 		EndEffect();
 	}
 
+	// query to maintain effect
+	if ( !EffectData.MustMaintainQuery.IsEmpty() && EffectData.MustMaintainQuery.Matches(OwnerAbilityComponent->GetActiveTags()))
+	{
+		EndEffect();
+	}
 
 	// If there's a period, check to see if it's time to tick
 	if (!IsPeriodPaused() && EffectData.Period > 0 && CurrentState == EGMASEffectState::Started)
@@ -219,6 +239,11 @@ void UGMCAbilityEffect::PeriodTick()
 			OwnerAbilityComponent->ApplyAbilityEffectModifier(AttributeModifier, true, false, SourceAbilityComponent);
 		}
 	}
+	PeriodTickEvent();
+}
+
+void UGMCAbilityEffect::PeriodTickEvent_Implementation()
+{
 }
 
 void UGMCAbilityEffect::UpdateState(EGMASEffectState State, bool Force)
@@ -234,6 +259,18 @@ void UGMCAbilityEffect::UpdateState(EGMASEffectState State, bool Force)
 bool UGMCAbilityEffect::IsPeriodPaused()
 {
 	return DoesOwnerHaveTagFromContainer(EffectData.PausePeriodicEffect);
+}
+
+void UGMCAbilityEffect::GetOwnerActor(AActor*& OutOwnerActor) const
+{
+	if (OwnerAbilityComponent)
+	{
+		OutOwnerActor = OwnerAbilityComponent->GetOwner();
+	}
+	else
+	{
+		OutOwnerActor = nullptr;
+	}
 }
 
 void UGMCAbilityEffect::AddTagsToOwner()
@@ -346,4 +383,27 @@ void UGMCAbilityEffect::CheckState()
 			break;
 	default: break;
 	}
+}
+
+void UGMCAbilityEffect::EndActiveAbilitiesByDefinitionQuery(FGameplayTagQuery EndAbilityOnActivationViaDefinitionQuery)
+{
+
+	if (EndAbilityOnActivationViaDefinitionQuery.IsEmpty()) return;
+
+	int NumCancelled = OwnerAbilityComponent->EndAbilitiesByQuery(EndAbilityOnActivationViaDefinitionQuery);
+
+	UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("Effect %s cancelled %d ability(ies) via EffectDefinition query."),
+		*EffectData.EffectTag.ToString(), NumCancelled);
+}
+
+void UGMCAbilityEffect::ModifyMustMaintainQuery(const FGameplayTagQuery& NewQuery)
+{
+	EffectData.MustMaintainQuery = NewQuery;
+	UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("MustMainQuery modified: %s"), *NewQuery.GetDescription());
+}
+
+void UGMCAbilityEffect::ModifyEndAbilitiesOnEndQuery(const FGameplayTagQuery& NewQuery)
+{
+	EffectData.EndAbilityOnEndQuery = NewQuery;
+	UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("EndAbilityOnEndViaDefinitionQuery modified: %s"), *NewQuery.GetDescription());
 }
