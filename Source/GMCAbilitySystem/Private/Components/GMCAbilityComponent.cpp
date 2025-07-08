@@ -1873,10 +1873,6 @@ void UGMC_AbilitySystemComponent::RemoveActiveAbilityEffectByTag(FGameplayTag Ta
 	
 }
 
-<<<<<<< HEAD
-
-=======
->>>>>>> 89ebde50f13cbeaffbb2a8b757ea5a913d16383b
 TArray<int> UGMC_AbilitySystemComponent::EffectsMatchingTag(const FGameplayTag& Tag, int32 NumToRemove) const
 {
 	if (NumToRemove < -1 || !Tag.IsValid()) {
