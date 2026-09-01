@@ -458,7 +458,7 @@ bool UGMC_AbilitySystemComponent::IsAbilityTagBlocked(const FGameplayTag Ability
 		{
 			for (auto& Tag : ActiveAbility.Value->BlockOtherAbility) {
 				if (AbilityTag.MatchesTag(Tag)) {
-					UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("Ability can't activate, blocked by Ability: %s"), *ActiveAbility.Value->GetName());
+					UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("Ability %s can't activate, blocked by Ability: %s"), *ActiveAbility.Value->GetName(), *ActiveAbility.Value->GetName());
 					return true;
 				}
 			}
@@ -1190,7 +1190,7 @@ bool UGMC_AbilitySystemComponent::CheckActivationTags(const UGMCAbility* Ability
 	{
 		if (!HasActiveTag(Tag))
 		{
-			UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("Ability can't activate, missing required tag:  %s"), *Tag.ToString());
+			UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("Ability %s can't activate, missing required tag:  %s"), *Ability->GetName(), *Tag.ToString());
 			return false;
 		}
 	}
@@ -1201,7 +1201,7 @@ bool UGMC_AbilitySystemComponent::CheckActivationTags(const UGMCAbility* Ability
 	{
 		if (HasActiveTag(Tag))
 		{
-			UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("Ability can't activate, blocked by tag: %s"), *Tag.ToString());
+			UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("Ability %s can't activate, blocked by tag: %s"), *Ability->GetName(), *Tag.ToString());
 			return false;
 		}
 	}
@@ -1209,8 +1209,8 @@ bool UGMC_AbilitySystemComponent::CheckActivationTags(const UGMCAbility* Ability
 	// single activation query
 	if (!Ability->ActivationQuery.IsEmpty() && !Ability->ActivationQuery.Matches(ActiveTags))
 	{
-		UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("Ability can't activate, blocked by query: %s"),
-			*Ability->ActivationQuery.GetDescription());
+		UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("Ability %s can't activate, blocked by query: %s"),
+			*Ability->GetName(), *Ability->ActivationQuery.GetDescription());
 		return false;
 	}
 
@@ -1266,6 +1266,7 @@ void UGMC_AbilitySystemComponent::AddAbilityMapData(const FAbilityMapData& Abili
 	{
 		GrantedAbilityTags.AddTag(AbilityMapData.InputTag);
 	}
+
 }
 
 void UGMC_AbilitySystemComponent::RemoveAbilityMapData(const FAbilityMapData& AbilityMapData)
@@ -2099,7 +2100,6 @@ bool UGMC_AbilitySystemComponent::RemoveEffectByIdSafe(TArray<int> Ids, EGMCAbil
 			{
 				if (!GMCMovementComponent->IsExecutingMove() && GetNetMode() != NM_Standalone && !bInAncillaryTick)
 				{
-
 					ensureMsgf(false, TEXT("[%20s] %s attempted a predicted removal of effects outside of a movement cycle! (%s)"),
 						*GetNetRoleAsString(GetOwnerRole()), *GetOwner()->GetName(), *GetEffectsNameAsString(GetEffectsByIds(Ids)));
 					UE_LOG(LogGMCAbilitySystem, Error, TEXT("[%20s] %s attempted a predicted removal of effects outside of a movement cycle! (%s)"),
