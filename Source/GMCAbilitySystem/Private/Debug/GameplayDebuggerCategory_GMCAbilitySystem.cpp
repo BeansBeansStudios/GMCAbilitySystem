@@ -51,26 +51,31 @@ void FGameplayDebuggerCategory_GMCAbilitySystem::DrawData(APlayerController* Own
 	{
 		CanvasContext.Printf(TEXT("{yellow}Actor name: {white}%s"), *DataPack.ActorName);
 
-		constexpr int MaxCharDisplayAbilities = 100;
+		constexpr int MaxCharDisplayAbilities = 130;
 		// Abilities
-		CanvasContext.Printf(TEXT("{blue}[server] {yellow}Granted Abilities (%d): {white}%s%s"), DataPack.NBGrantedAbilities, *DataPack.GrantedAbilities.Left(MaxCharDisplayAbilities), DataPack.GrantedAbilities.Len() > MaxCharDisplayAbilities ? TEXT("...") : TEXT(""));
+		DrawWrappedText(CanvasContext, TEXT("{blue}[server] {yellow}Granted Abilities: {white}"), DataPack.GrantedAbilities, MaxCharDisplayAbilities, true);
+		//CanvasContext.Printf(TEXT("{blue}[server] {yellow}Granted Abilities (%d): {white}%s%s"), DataPack.NBGrantedAbilities, *DataPack.GrantedAbilities.Left(MaxCharDisplayAbilities), DataPack.GrantedAbilities.Len() > MaxCharDisplayAbilities ? TEXT("...") : TEXT(""));
 		// Show client-side data
 		if (AbilityComponent)
 		{
+
 			if (DataPack.NBGrantedAbilities != AbilityComponent->GetGrantedAbilities().Num())
 			{
-				CanvasContext.Printf(
+				DrawWrappedText(CanvasContext, TEXT("{green}[client] {yellow}Granted Abilities: {red} [INCOHERENCY] {white}"), AbilityComponent->GetGrantedAbilities().ToStringSimple(), MaxCharDisplayAbilities, true);
+			}
+			/*CanvasContext.Printf(
 					TEXT("{green}[client] {yellow}Granted Abilities (%d): {red} [INCOHERENCY] {white}%s%s"),
 					AbilityComponent->GetGrantedAbilities().Num(),
 					*AbilityComponent->GetGrantedAbilities().ToStringSimple().Left(MaxCharDisplayAbilities),
-					AbilityComponent->GetGrantedAbilities().ToStringSimple().Len() > MaxCharDisplayAbilities ? TEXT("...") : TEXT(""));
-			}
+					AbilityComponent->GetGrantedAbilities().ToStringSimple().Len() > MaxCharDisplayAbilities ? TEXT("...") : TEXT(""));*/
+			
 			else
 			{
-				CanvasContext.Printf(
+				DrawWrappedText(CanvasContext, TEXT("{green}[client] {yellow}Granted Abilities: {white}"), AbilityComponent->GetGrantedAbilities().ToStringSimple(), MaxCharDisplayAbilities, true);
+				/*CanvasContext.Printf(
 					TEXT("{green}[client] {yellow}Granted Abilities (%d): {white}%s%s"), AbilityComponent->GetGrantedAbilities().Num(),
 					*AbilityComponent->GetGrantedAbilities().ToStringSimple().Left(MaxCharDisplayAbilities),
-					AbilityComponent->GetGrantedAbilities().ToStringSimple().Len() > MaxCharDisplayAbilities ? TEXT("...") : TEXT(""));
+					AbilityComponent->GetGrantedAbilities().ToStringSimple().Len() > MaxCharDisplayAbilities ? TEXT("...") : TEXT(""));*/
 			}
 		}
 
@@ -126,11 +131,11 @@ void FGameplayDebuggerCategory_GMCAbilitySystem::DrawData(APlayerController* Own
 			if (DataPack.NBActiveEffectData != AbilityComponent->ActiveEffectsData.Num())
 				CanvasContext.Printf(TEXT("{green}[client] {yellow}Active Effects Data: {red} [INCOHERENCY] {white}%s"), *AbilityComponent->GetActiveEffectsDataString());
 			else
-			CanvasContext.Printf(TEXT("{green}[client] {yellow}Active Effects Data: {white}%s"), *AbilityComponent->GetActiveEffectsDataString());
+				CanvasContext.Printf(TEXT("{green}[client] {yellow}Active Effects Data: {white}%s"), *AbilityComponent->GetActiveEffectsDataString());
 		}
-		
 	}
 }
+
 
 TSharedRef<FGameplayDebuggerCategory> FGameplayDebuggerCategory_GMCAbilitySystem::MakeInstance()
 {
@@ -153,5 +158,89 @@ void FGameplayDebuggerCategory_GMCAbilitySystem::FRepData::Serialize(FArchive& A
 	Ar << NBActiveEffectData;
 	Ar << NBActiveAbilities;
 }
+
+void FGameplayDebuggerCategory_GMCAbilitySystem::DrawWrappedText(FGameplayDebuggerCanvasContext& CanvasContext, const FString& Header, const FString& Content, int32 MaxLineLength,bool IndentSubsequentLines,const FString& IndentStr)
+{
+    // If both header and content are empty, nothing to do
+    if (Header.IsEmpty() && Content.IsEmpty())
+    {
+        return;
+    }
+    
+    // Combine header and content if both exist
+    FString CombinedText;
+    if (!Header.IsEmpty() && !Content.IsEmpty())
+    {
+        CombinedText = Header + Content;
+    }
+    else if (!Header.IsEmpty())
+    {
+        CombinedText = Header;
+    }
+    else
+    {
+        CombinedText = Content;
+    }
+    
+    // Split content into multiple lines
+    TArray<FString> ContentLines;
+    FString RemainingText = CombinedText;
+    
+    while (!RemainingText.IsEmpty())
+    {
+        FString Line;
+        // Add indentation for subsequent lines if requested
+        if (IndentSubsequentLines && ContentLines.Num() > 0)
+        {
+            Line = IndentStr;
+        }
+        
+        // If the remaining text fits in one line, add it and exit loop
+        if (RemainingText.Len() <= MaxLineLength)
+        {
+            Line += RemainingText;
+            ContentLines.Add(Line);
+            break;
+        }
+        else
+        {
+            // Find a good breaking point (prefer comma, space or other delimiters)
+            int32 BreakPos = MaxLineLength;
+            while (BreakPos > MaxLineLength / 2 && 
+                   RemainingText[BreakPos] != ',' && 
+                   RemainingText[BreakPos] != ' ' &&
+                   RemainingText[BreakPos] != ';' &&
+                   RemainingText[BreakPos] != '|')
+            {
+                BreakPos--;
+            }
+            
+            // If no good break found in reasonable range, just break at MaxLineLength
+            if (BreakPos <= MaxLineLength / 2)
+            {
+                BreakPos = MaxLineLength;
+            }
+            else
+            {
+                // Move past the delimiter for cleaner text segments
+                BreakPos++;
+            }
+            
+            Line += RemainingText.Left(BreakPos);
+            ContentLines.Add(Line);
+            
+            // Remove the part we just processed
+            RemainingText = RemainingText.Mid(BreakPos).TrimStart();
+        }
+    }
+    
+    // Display each line
+    for (const FString& Line : ContentLines)
+    {
+        CanvasContext.Printf(TEXT("%s"), *Line);
+    }
+
+}
+
 
 #endif

@@ -19,6 +19,24 @@ public:
 
 	static TSharedRef<FGameplayDebuggerCategory> MakeInstance();
 
+	/**
+ * Splits a long string into multiple lines for better display in the Gameplay Debugger.
+ * 
+ * @param CanvasContext - The canvas context to print the text to
+ * @param Header - Optional header text to display before the wrapped content
+ * @param Content - The text content to wrap and display
+ * @param MaxLineLength - Maximum length of each line before wrapping
+ * @param IndentSubsequentLines - Whether to indent lines after the first one
+ * @param IndentStr - The string to use for indentation (default is 4 spaces)
+ */
+	void DrawWrappedText(FGameplayDebuggerCanvasContext& CanvasContext, 
+					 const FString& Header,
+					 const FString& Content, 
+					 int32 MaxLineLength = 100,
+					 bool IndentSubsequentLines = true,
+					 const FString& IndentStr = TEXT("    "));
+
+
 protected:
 	struct FRepData
 	{
