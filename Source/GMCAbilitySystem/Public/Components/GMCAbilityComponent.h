@@ -263,7 +263,7 @@ public:
 	 * 							   reducing server charge, but also required in case of activation key wait inside the ability.
 	 */
 	UFUNCTION(BlueprintCallable, DisplayName="Activate Ability", Category="GMAS|Abilities")
-	void QueueAbility(UPARAM(meta=(Categories="Input"))
+	void QueueAbility(UPARAM(meta=(Categories="InputTag"))
 	                  FGameplayTag InputTag, const UInputAction* InputAction = nullptr, bool bPreventConcurrentActivation = false);
 
 	UFUNCTION(BlueprintCallable, DisplayName="Count Queued Ability Instances", Category="GMAS|Abilities")
@@ -744,7 +744,6 @@ private:
 	FEffectStatePrediction EffectStatePrediction{};
 
 	TArray<FEffectStatePrediction> QueuedEffectStates;
-
 	UPROPERTY()
 	TMap<int, UGMCAbility*> ActiveAbilities;
 	
