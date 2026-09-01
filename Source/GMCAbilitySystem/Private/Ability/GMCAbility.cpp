@@ -196,7 +196,7 @@ void UGMCAbility::CancelConflictingAbilities()
 		}
 
 		if (OwnerAbilityComponent->EndAbilitiesByTag(AbilityToCancelTag)) {
-			UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("Ability (tag) %s has been cancelled by (tag) %s"), *AbilityTag.ToString(), *AbilityToCancelTag.ToString());
+			UE_LOG(LogGMCAbilitySystem, Verbose, TEXT("Ability (tag) %s will try to cancel (tag) %s"), *AbilityTag.ToString(), *AbilityToCancelTag.ToString());
 		}
 	}
 
@@ -215,7 +215,6 @@ void UGMCAbility::CancelConflictingAbilities()
 		}
 	}
 }
-
 
 void UGMCAbility::ServerConfirm()
 {
@@ -402,7 +401,7 @@ void UGMCAbility::BeginAbility()
 
 	// Initialize Ability
 	AbilityState = EAbilityState::Initialized;
-
+	
 	// Cancel Abilities in CancelAbilitiesWithTag container
 	CancelConflictingAbilities();
 
